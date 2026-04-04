@@ -11,7 +11,7 @@ namespace PHPdot\Error;
  * Same bag used in controllers, services, validators — everywhere.
  * Serialized identically for JSON API, HTML forms, WebSocket, CLI.
  */
-final class ErrorBag
+final class ErrorBag implements \Countable
 {
     /** @var list<ErrorEntry> */
     private array $errors = [];
@@ -25,12 +25,14 @@ final class ErrorBag
      */
     public function add(ErrorCodeInterface $error, ?string $context = null, array $params = []): self
     {
+        $details = $error->getDetails();
+
         $this->errors[] = new ErrorEntry(
             code: $error->getCode(),
-            message: $error->getMessage(),
-            description: $error->getDescription(),
-            type: $error->getType(),
-            httpStatus: $error->getHttpStatus(),
+            message: $details['message'],
+            description: $details['description'],
+            type: $details['type'],
+            httpStatus: $details['httpStatus'],
             context: $context,
             params: $params,
         );
