@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace PHPdot\Error\Tests\Unit;
 
+use PHPdot\Contracts\I18n\MessageTranslatorInterface;
 use PHPdot\Error\ErrorBag;
 use PHPdot\Error\ErrorEntry;
 use PHPdot\Error\ErrorType;
@@ -329,5 +330,56 @@ final class ErrorBagTest extends TestCase
         $result = $bag->merge(new ErrorBag());
 
         self::assertSame($bag, $result);
+    }
+
+    #[Test]
+    public function it_keeps_description_as_key_when_no_translator(): void
+    {
+        $bag = new ErrorBag();
+        $bag->add(UserErrors::NOT_FOUND, 'user_id');
+
+        $entry = $bag->first();
+        self::assertNotNull($entry);
+        self::assertSame('errors.user.not_found', $entry->description);
+        self::assertSame('User not found', $entry->message);
+    }
+
+    #[Test]
+    public function it_translates_description_when_translator_wired(): void
+    {
+        $translator = new class implements MessageTranslatorInterface {
+            public function translate(string $key, array $params = []): string
+            {
+                return 'TRANSLATED:' . $key . ':' . json_encode($params);
+            }
+        };
+
+        $bag = new ErrorBag($translator);
+        $bag->add(UserErrors::EMAIL_TAKEN, 'email', ['email' => 'a@b.c']);
+
+        $entry = $bag->first();
+        self::assertNotNull($entry);
+        self::assertSame('TRANSLATED:errors.user.email_taken:{"email":"a@b.c"}', $entry->description);
+        // message field is untouched — always the enum's English string
+        self::assertSame('Email is already taken', $entry->message);
+    }
+
+    #[Test]
+    public function it_passes_translator_output_through_unchanged(): void
+    {
+        // Translator returns "[key]" for missing keys — bag must not second-guess.
+        $translator = new class implements MessageTranslatorInterface {
+            public function translate(string $key, array $params = []): string
+            {
+                return '[' . $key . ']';
+            }
+        };
+
+        $bag = new ErrorBag($translator);
+        $bag->add(UserErrors::NOT_FOUND);
+
+        $entry = $bag->first();
+        self::assertNotNull($entry);
+        self::assertSame('[errors.user.not_found]', $entry->description);
     }
 }
