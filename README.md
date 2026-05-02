@@ -1,6 +1,6 @@
 # phpdot/error
 
-Structured error codes with context, translatable messages, and uniform output across every channel. Zero dependencies.
+Structured error codes with context, translatable messages, and uniform output across every channel. Optional translator integration via `phpdot/contracts`.
 
 ---
 
@@ -61,7 +61,7 @@ composer require phpdot/error
 | Requirement | Version |
 |-------------|---------|
 | PHP | >= 8.3 |
-| Dependencies | **None** |
+| phpdot/contracts | ^1.3 |
 
 ---
 
@@ -103,7 +103,9 @@ enum UserErrors: string implements ErrorCodeInterface
 **2. Collect errors:**
 
 ```php
-$errors = new ErrorBag();
+$errors = new ErrorBag();           // raw mode — descriptions stay as keys
+// or
+$errors = new ErrorBag($translator); // descriptions are translated at add() time
 
 if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
     $errors->add(UserErrors::INVALID_EMAIL, 'email');
@@ -175,7 +177,7 @@ src/
 └── HttpStatus.php           # HTTP status codes enum
 ```
 
-6 files. 409 lines. Zero dependencies.
+6 files. Single optional dependency on `phpdot/contracts` for the cross-package translator interface.
 
 ---
 
@@ -527,6 +529,35 @@ foreach ($bag->all() as $error) {
 }
 ```
 
+### Auto-Translation via `MessageTranslatorInterface`
+
+`ErrorBag` accepts an optional `PHPdot\Contracts\I18n\MessageTranslatorInterface` in its constructor. When wired, every `add()` call replaces the entry's `description` field with the translator's output for the original key + ICU params:
+
+```php
+use PHPdot\Error\ErrorBag;
+
+$bag = new ErrorBag($translator);   // any class implementing MessageTranslatorInterface
+$bag->add(UserErrors::EMAIL_TAKEN, 'email', ['email' => 'omar@phpdot.com']);
+
+$bag->first()->message;       // 'Email is already taken' (always — enum's English string)
+$bag->first()->description;   // 'The email omar@phpdot.com is already registered.'
+                              // (translated; was the raw key without translator)
+```
+
+The `message` field is **never** touched by the bag — it always carries the enum's English string (developer-facing documentation). The `description` field is the runtime-variable one: the raw translation key when no translator is wired, or the translated string when one is.
+
+The bag does not second-guess the translator. Whatever the translator returns — including a `[key]` sentinel for missing keys — goes straight into `description`. Fallback policy is the translator's responsibility, not the bag's.
+
+```php
+$bag = new ErrorBag();              // no translator
+$bag->add(UserErrors::EMAIL_TAKEN);  // description stays as 'errors.user.email_taken'
+
+$bag = new ErrorBag($translator);    // translator wired
+$bag->add(UserErrors::EMAIL_TAKEN);  // description becomes the translated string
+```
+
+`MessageTranslatorInterface` ships in `phpdot/contracts`. `phpdot/i18n`'s `Translator` already implements it, but any compatible translator works.
+
 ---
 
 ## Output Formats
@@ -691,6 +722,7 @@ toArray(): array{code, message, description, type, httpStatus, context, params}
 ```
 final class ErrorBag
 
+__construct(?MessageTranslatorInterface $translator = null)
 add(ErrorCodeInterface $error, ?string $context = null, array $params = []): self
 addEntry(ErrorEntry $entry): self
 hasErrors(): bool
