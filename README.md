@@ -142,28 +142,68 @@ if ($errors->hasErrors()) {
 
 ## Architecture
 
-### Flow
+```mermaid
+graph LR
+    subgraph "Module side"
+        ENUM[Module enum<br/>UserErrors, OrderErrors]
+        ECI[ErrorCodeInterface]
+        ECT[ErrorCodeTrait]
+        ENUM -.->|implements| ECI
+        ENUM -.->|uses| ECT
+    end
 
-```
-Module enum (UserErrors, OrderErrors, etc.)
-    implements ErrorCodeInterface
-    uses ErrorCodeTrait
-        │
-        │ provides: code, message, description (i18n key), type, httpStatus
-        ▼
-ErrorBag::add(UserErrors::EMAIL_TAKEN, 'email', ['email' => $email])
-        │
-        │ creates ErrorEntry DTO
-        ▼
-ErrorBag collects ErrorEntry objects
-        │
-        ├──► JSON API:  $bag->toArray() → uniform JSON
-        ├──► HTML form: $bag->forContext('email') → show next to field
-        ├──► CLI:       $bag->all() → formatted output
-        └──► WebSocket: $bag->toArray() → same JSON
+    subgraph "Bag construction"
+        FACTORY[ErrorBagFactory]
+        BAG[ErrorBag]
+        FACTORY -->|create| BAG
+    end
+
+    TRANS[MessageTranslatorInterface]
+    FACTORY -->|optional| TRANS
+    BAG -->|optional| TRANS
+
+    ENUM -->|add into| BAG
+    BAG -->|collects| ENTRY[ErrorEntry<br/>code / description / type / httpStatus / context / params]
+
+    BAG --> JSON["JSON API<br/>toArray()"]
+    BAG --> HTML["HTML form<br/>forContext()"]
+    BAG --> CLI["CLI<br/>all()"]
+    BAG --> WS["WebSocket<br/>toArray()"]
+
+    style FACTORY fill:#2d3748,color:#fff
+    style BAG fill:#2d3748,color:#fff
+    style ENTRY fill:#4a5568,color:#fff
+    style TRANS fill:#4a5568,color:#fff
+    style ECI fill:#4a5568,color:#fff
+    style ECT fill:#718096,color:#fff
+    style ENUM fill:#718096,color:#fff
 ```
 
 One error. One code. One structure. Every channel. Every language.
+
+## How It Works
+
+### Add flow
+
+```mermaid
+flowchart TD
+    A["bag->add(EnumCase, context, params)"] --> B[Read EnumCase getDetails]
+    B --> C{Bag has<br/>translator?}
+    C -->|yes| D["translator->translate(description, params)"]
+    C -->|no| E[Keep description as raw key]
+    D --> F[Create ErrorEntry]
+    E --> F
+    F --> G[Append to bag]
+
+    style A fill:#2d3748,color:#fff
+    style F fill:#4a5568,color:#fff
+    style G fill:#276749,color:#fff
+```
+
+### Two ways to construct a bag
+
+- **Direct**: `new ErrorBag()` for a raw bag, or `new ErrorBag($translator)` to build one that translates `description` keys at `add()` time.
+- **Through `ErrorBagFactory`**: inject the factory once, call `create()` for each fresh bag. The factory carries the (optional) translator, so every bag it produces is pre-wired. Designed for DI auto-wiring — services that depend on the factory never import `MessageTranslatorInterface` themselves.
 
 ### Package Structure
 
@@ -173,11 +213,12 @@ src/
 ├── ErrorCodeTrait.php       # Default implementation via getDetails()
 ├── ErrorEntry.php           # Readonly DTO — single error
 ├── ErrorBag.php             # Collector — add, filter, merge, serialize
+├── ErrorBagFactory.php      # Produces fresh bags pre-wired with translator
 ├── ErrorType.php            # 9 error categories
 └── HttpStatus.php           # HTTP status codes enum
 ```
 
-6 files. Single optional dependency on `phpdot/contracts` for the cross-package translator interface.
+7 files. Single optional dependency on `phpdot/contracts` for the cross-package translator interface.
 
 ---
 
@@ -400,6 +441,56 @@ Clear and reset:
 ```php
 $bag->clear(); // remove all errors, returns self
 ```
+
+---
+
+## ErrorBagFactory
+
+Produces fresh `ErrorBag` instances pre-wired with an optional translator. Inject the factory once, call `create()` whenever you need a new bag — translator threading happens automatically.
+
+```php
+use PHPdot\Error\ErrorBagFactory;
+
+// No translator — produces raw bags
+$factory = new ErrorBagFactory();
+$bag = $factory->create();
+$bag->add(UserErrors::EMAIL_TAKEN, 'email');
+$bag->first()->description; // 'errors.user.email_taken' (raw key)
+
+// With translator — every bag carries it
+$factory = new ErrorBagFactory($translator);
+$bag = $factory->create();
+$bag->add(UserErrors::EMAIL_TAKEN, 'email', ['email' => 'omar@phpdot.com']);
+$bag->first()->description; // 'The email omar@phpdot.com is already registered.'
+```
+
+Each `create()` call returns a new, independent bag — no shared state between calls.
+
+### Auto-wired usage
+
+When using `phpdot/container`, services that need to produce errors inject the factory directly. The translator is wired into the factory through the container and passed to every bag the factory produces — without the service ever importing `MessageTranslatorInterface`:
+
+```php
+final class UserService
+{
+    public function __construct(
+        private readonly ErrorBagFactory $bags,
+    ) {}
+
+    public function register(string $email): User|ErrorBag
+    {
+        $bag = $this->bags->create();
+
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $bag->add(UserErrors::INVALID_EMAIL, 'email');
+        }
+
+        return $bag->hasErrors() ? $bag : $this->users->create($email);
+    }
+}
+```
+
+The factory is `#[Scoped]` so each execution unit (request, coroutine) gets its own instance with its own per-request translator.
 
 ---
 
