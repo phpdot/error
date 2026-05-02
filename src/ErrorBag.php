@@ -4,17 +4,30 @@ declare(strict_types=1);
 
 namespace PHPdot\Error;
 
+use PHPdot\Contracts\I18n\MessageTranslatorInterface;
+
 /**
  * Collects errors during a request or operation.
  *
  * Accumulates ErrorEntry objects from any module's error enum.
  * Same bag used in controllers, services, validators — everywhere.
  * Serialized identically for JSON API, HTML forms, WebSocket, CLI.
+ *
+ * Optionally accepts a `MessageTranslatorInterface`. When wired, every
+ * `add()` call sets the entry's `description` field to the translator's
+ * output for the original description key + ICU params. When no translator
+ * is wired, `description` stays as the raw key. The `message` field is
+ * always the enum's English string. The bag does not second-guess the
+ * translator: whatever the translator returns is what the entry carries.
  */
 final class ErrorBag implements \Countable
 {
     /** @var list<ErrorEntry> */
     private array $errors = [];
+
+    public function __construct(
+        private readonly ?MessageTranslatorInterface $translator = null,
+    ) {}
 
     /**
      * Add an error from an ErrorCodeInterface enum.
@@ -27,10 +40,14 @@ final class ErrorBag implements \Countable
     {
         $details = $error->getDetails();
 
+        $description = $this->translator !== null
+            ? $this->translator->translate($details['description'], $params)
+            : $details['description'];
+
         $this->errors[] = new ErrorEntry(
             code: $error->getCode(),
             message: $details['message'],
-            description: $details['description'],
+            description: $description,
             type: $details['type'],
             httpStatus: $details['httpStatus'],
             context: $context,

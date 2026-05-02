@@ -11,7 +11,8 @@
     ],
     "keywords": ["error", "error-code", "error-bag", "validation", "i18n", "structured"],
     "require": {
-        "php": ">=8.3"
+        "php": ">=8.3",
+        "phpdot/contracts": "^1.3"
     },
     "require-dev": {
         "phpunit/phpunit": "^11.0",
